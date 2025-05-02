@@ -6,24 +6,32 @@ use tokio::{
 #[tokio::main]
 async fn main() {
     let listner = TcpListener::bind("localhost:8080").await.unwrap();
-    let (tx, _) = broadcast::channel::<String>(10);
+    let (tx, _) = broadcast::channel(10);
     loop {
         let tx = tx.clone();
         let mut rx = tx.subscribe();
-        let (mut socket, _address) = listner.accept().await.unwrap();
+        let (mut socket, address) = listner.accept().await.unwrap();
         tokio::spawn(async move{
             let (stream_reader, mut stream_writer) = socket.split();
             let mut message = String::new();
             let mut reader = BufReader::new(stream_reader);
             loop {
-                let bytes_read = reader.read_line(&mut message).await.unwrap();
-                if bytes_read == 0{
-                    break;
+                tokio::select! {
+                    result = reader.read_line(&mut message) => {
+                        if result.unwrap() == 0{
+                            break;
+                        }
+                        tx.send((message.clone(), address)).unwrap();
+                        message.clear();
+                    }
+                    result = rx.recv()=>{
+                        let (received_message, sender_address )= result.unwrap();
+                        if address!=sender_address{
+                            stream_writer.write_all(received_message.as_bytes()).await.unwrap();
+                        }
+                        
+                    }
                 }
-                tx.send(message.clone()).unwrap();
-                let received_message = rx.recv().await.unwrap();
-                stream_writer.write_all(received_message.as_bytes()).await.unwrap();
-                message.clear();
             }
         });
 
